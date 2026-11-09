@@ -99,8 +99,21 @@ either outcome is visible.
   curves. `saturation_horizon`: first horizon at which the mean latent divergence reaches 95% of
   its maximum (later is better). `embedded_divergence` (the embedded true frames) and
   `pixel_divergence` (frame RMSE) are reported as controls.
+- **Branch collapse.** A head can fail by rolling distinct action sequences toward one mean
+  trajectory. `branch_separation_ratio` is the mean latent divergence over the mean embedded
+  divergence at each horizon. Both are geodesic distances in the same manifold, so the ratio is
+  unit-free and comparable across geometries and curvatures: `1` is ideal, below `1` is
+  collapse, above `1` is over-separation. Because it has no preferred direction it is reported
+  (`_hmax`, `_mean`, and a per-pair median in the curves) but never ranked. The ranked forms are
+  `branch_separation_log_error`, the mean over horizons of `|log ratio|` (lower is better,
+  symmetric in collapse and over-separation, floored so a static head ranks worst instead of
+  infinite), and `branch_collapse_fraction`, the fraction of pairs whose latent divergence is
+  below `collapse_threshold` (default 0.25) times their own embedded divergence (lower is
+  better; `_hmax` and `_mean`). Pairs whose true frames coincide have no ratio and never count
+  as collapsed.
 - **Falsified if** the correlation is not higher, or saturation is not later, for the best
-  curvature versus Euclidean.
+  curvature versus Euclidean. Branch separation is reported alongside as a diagnostic: a
+  geometry whose correlation is high only because every branch collapsed shows up here.
 - **Data.** Cosmos 3 generated branching trajectories (`branch_pairs`); synthetic prompts with
   `n_branches > 1` for CI.
 

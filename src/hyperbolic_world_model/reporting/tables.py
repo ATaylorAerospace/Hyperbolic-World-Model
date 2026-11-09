@@ -66,9 +66,17 @@ HIGHER_IS_BETTER: frozenset[str] = frozenset(
 )
 
 #: Result metrics with no preferred direction: a branch divergence that is larger or smaller than
-#: the Euclidean one is neither better nor worse, so they get sweep tables and figures but no
+#: the Euclidean one is neither better nor worse, and a branch separation ratio is ideal at 1 (its
+#: ranked form is ``branch_separation_log_error``). They get sweep tables and figures but no
 #: best-curvature or dimension-efficiency row.
-UNRANKED_METRICS: frozenset[str] = frozenset({"latent_divergence_h1", "latent_divergence_hmax"})
+UNRANKED_METRICS: frozenset[str] = frozenset(
+    {
+        "latent_divergence_h1",
+        "latent_divergence_hmax",
+        "branch_separation_ratio_hmax",
+        "branch_separation_ratio_mean",
+    }
+)
 
 #: Bookkeeping scalars that are not results and are left out of sweep tables and figures.
 COUNT_METRICS: frozenset[str] = frozenset(

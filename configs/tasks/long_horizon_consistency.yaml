@@ -2,3 +2,4 @@
 - name: long_horizon_consistency
   horizon: 32
   batch_size: 16
+  collapse_threshold: 0.25   # a pair is collapsed when latent divergence < this x embedded divergence
