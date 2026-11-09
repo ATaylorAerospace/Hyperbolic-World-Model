@@ -1,8 +1,8 @@
-[![Hyperbolic Latent Evaluation](docs/header.png)](https://github.com/ATaylorAerospace/hyperbolic-world-model)
+[![Hyperbolic Latent Evaluation](docs/header.png)](https://github.com/ATaylorAerospace/Hyperbolic-World-Model)
 
 # 🌀 Hyperbolic Latent Evaluation for World Models 📐
 
-[![CI](https://github.com/ATaylorAerospace/hyperbolic-world-model/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ATaylorAerospace/hyperbolic-world-model/actions/workflows/ci.yml?query=branch%3Amain)
+[![CI](https://github.com/ATaylorAerospace/Hyperbolic-World-Model/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ATaylorAerospace/Hyperbolic-World-Model/actions/workflows/ci.yml?query=branch%3Amain)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.2%2B-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org)
@@ -252,8 +252,8 @@ Environment variables (copy `.env.example` to `.env`):
 1. **Clone**
 
    ```bash
-   git clone https://github.com/ATaylorAerospace/hyperbolic-world-model
-   cd hyperbolic-world-model
+   git clone https://github.com/ATaylorAerospace/Hyperbolic-World-Model
+   cd Hyperbolic-World-Model
    ```
 
 2. **Install** (uv creates `.venv` from the lockfile; add `--index https://download.pytorch.org/whl/cpu` style overrides for a CPU-only torch as CI does)

@@ -40,7 +40,7 @@ vjepa2 = [
 ]
 
 [project.urls]
-Repository = "https://github.com/ATaylorAerospace/hyperbolic-world-model"
+Repository = "https://github.com/ATaylorAerospace/Hyperbolic-World-Model"
 
 [project.scripts]
 hwm-train = "hyperbolic_world_model.training.train_predictor:main"
