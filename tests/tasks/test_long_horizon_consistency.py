@@ -14,8 +14,11 @@ from hyperbolic_world_model.data.synthetic import SyntheticSpec, SyntheticTrajec
 from hyperbolic_world_model.tasks import LongHorizonConsistencyTask
 from hyperbolic_world_model.tasks.long_horizon_consistency import (
     DIVERGENCES,
+    RATIO_FLOOR,
     branch_pairs_of,
+    branch_separation,
     saturation_horizon,
+    separation_log_error,
 )
 from tests.tasks.helpers import (
     GEOMETRIES,
@@ -34,10 +37,23 @@ METRICS = {
     "latent_divergence_h1",
     "latent_divergence_hmax",
     "latent_divergence_growth",
+    "branch_separation_ratio_hmax",
+    "branch_separation_ratio_mean",
+    "branch_separation_log_error",
+    "branch_collapse_fraction_hmax",
+    "branch_collapse_fraction_mean",
     "n_pairs",
     "horizon",
 }
-CURVE_COLS = ["horizon", *DIVERGENCES, "spearman", "n_pairs"]
+CURVE_COLS = [
+    "horizon",
+    *DIVERGENCES,
+    "spearman",
+    "branch_separation_ratio",
+    "branch_separation_ratio_median",
+    "branch_collapse_fraction",
+    "n_pairs",
+]
 
 
 def test_saturation_horizon() -> None:
@@ -106,6 +122,14 @@ def test_static_head_has_zero_latent_divergence_and_undefined_correlation() -> N
     assert math.isnan(res.metrics["divergence_spearman"])
     assert math.isnan(res.metrics["latent_divergence_growth"])
     assert res.metrics["saturation_horizon"] == 1
+    # A static head is total branch collapse: zero separation, every pair collapsed, and a
+    # finite worst-case log error (the ratio is floored, not infinite) so it still ranks.
+    assert (res.curves["branch_separation_ratio"] == 0).all()
+    assert (res.curves["branch_collapse_fraction"] == 1).all()
+    assert res.metrics["branch_separation_ratio_hmax"] == 0
+    assert res.metrics["branch_collapse_fraction_hmax"] == 1
+    assert res.metrics["branch_collapse_fraction_mean"] == 1
+    assert res.metrics["branch_separation_log_error"] == pytest.approx(-math.log(RATIO_FLOOR))
 
 
 def test_rollouts_and_divergences_match_a_manual_computation() -> None:
@@ -167,6 +191,9 @@ def test_constructor_validation() -> None:
         LongHorizonConsistencyTask(horizon=0)
     with pytest.raises(ValueError, match="saturation_fraction"):
         LongHorizonConsistencyTask(saturation_fraction=1.5)
+    for bad in (0.0, -0.1, 1.5):
+        with pytest.raises(ValueError, match="collapse_threshold"):
+            LongHorizonConsistencyTask(collapse_threshold=bad)
 
 
 def test_run_on_the_cosmos_dataset_layout(tmp_path: Path) -> None:
@@ -238,3 +265,72 @@ def test_synthetic_branches_share_embodiment_and_task() -> None:
     )
     assert [m["embodiment"] for m in plain.meta[:4]] == ["arm_a", "arm_b", "arm_a", "arm_b"]
     assert plain.meta[9]["task"] == "task_0" and plain.meta[9]["primitive"] == "grasp"
+
+
+def test_branch_separation_statistics() -> None:
+    # Ratio of means, per-pair median and collapse fraction on a hand-computed example.
+    s = branch_separation([0.1, 1.0, 3.0], [1.0, 1.0, 2.0], collapse_threshold=0.25)
+    assert s["ratio"] == pytest.approx(4.1 / 4.0)
+    assert s["median"] == pytest.approx(1.0)  # per-pair ratios 0.1, 1.0, 1.5
+    assert s["collapse_fraction"] == pytest.approx(1 / 3)  # only 0.1 < 0.25 * 1.0
+    # The threshold is strict and scales with each pair's own embedded divergence.
+    assert branch_separation([0.25, 0.5], [1.0, 2.0], 0.25)["collapse_fraction"] == 0
+    assert branch_separation([0.2, 0.4], [1.0, 2.0], 0.25)["collapse_fraction"] == 1
+    # A pair whose true frames coincide has no ratio: it cannot blow up the median or count
+    # as collapsed, and the ratio of means stays finite.
+    s = branch_separation([0.5, 0.5], [0.0, 1.0], 0.25)
+    assert s["ratio"] == pytest.approx(1.0) and s["median"] == pytest.approx(0.5)
+    assert s["collapse_fraction"] == 0
+    # If no true branch separated at all, the ratios are undefined rather than huge.
+    s = branch_separation([0.3, 0.2], [0.0, 0.0], 0.25)
+    assert math.isnan(s["ratio"]) and math.isnan(s["median"]) and s["collapse_fraction"] == 0
+    with pytest.raises(ValueError, match="equal length"):
+        branch_separation([1.0], [1.0, 2.0], 0.25)
+    with pytest.raises(ValueError, match="non-empty"):
+        branch_separation([], [], 0.25)
+
+
+def test_separation_log_error_is_symmetric_and_ranks_collapse_worst() -> None:
+    assert separation_log_error([1.0, 1.0]) == 0
+    # Collapse to a half and over-separation by two are equally wrong.
+    assert separation_log_error([0.5]) == pytest.approx(separation_log_error([2.0]))
+    assert separation_log_error([0.5, 2.0]) == pytest.approx(math.log(2))
+    assert separation_log_error([0.0]) == pytest.approx(-math.log(RATIO_FLOOR))
+    assert separation_log_error([math.nan, 2.0]) == pytest.approx(math.log(2))
+    assert math.isnan(separation_log_error([math.nan]))
+
+
+@pytest.mark.parametrize("geom", GEOMETRIES)
+def test_branch_separation_matches_the_divergence_curves(geom: tuple[str, float]) -> None:
+    """The reported ratio is mean latent over mean embedded divergence, in every geometry."""
+    ds = BranchingDataset(n_prompts=3, n_branches=3, horizon=4)
+    res = LongHorizonConsistencyTask(horizon=4, batch_size=4).run(
+        tiny_bundle(*geom, perturb=0.3), ds
+    )
+    c = res.curves
+    expected = c["latent_divergence"] / c["embedded_divergence"]
+    assert c["branch_separation_ratio"].to_numpy() == pytest.approx(expected.to_numpy())
+    assert (c["branch_separation_ratio_median"] > 0).all()
+    assert c["branch_collapse_fraction"].between(0, 1).all()
+    m = res.metrics
+    assert m["branch_separation_ratio_hmax"] == pytest.approx(expected.iloc[-1])
+    assert m["branch_separation_ratio_mean"] == pytest.approx(expected.mean())
+    assert m["branch_separation_log_error"] == pytest.approx(expected.map(math.log).abs().mean())
+    assert m["branch_collapse_fraction_hmax"] == c["branch_collapse_fraction"].iloc[-1]
+    assert m["branch_collapse_fraction_mean"] == pytest.approx(c["branch_collapse_fraction"].mean())
+
+
+def test_collapse_threshold_controls_the_collapse_fraction() -> None:
+    ds = BranchingDataset(n_prompts=3, n_branches=3, horizon=3)
+    bundle = tiny_bundle("poincare", -1.0, perturb=0.3)
+    fractions = [
+        LongHorizonConsistencyTask(horizon=3, collapse_threshold=t)
+        .run(bundle, ds)
+        .metrics["branch_collapse_fraction_mean"]
+        for t in (1e-6, 0.25, 1.0)
+    ]
+    assert fractions[0] == 0 and fractions == sorted(fractions)
+    # The other metrics do not depend on the threshold.
+    a = LongHorizonConsistencyTask(horizon=3, collapse_threshold=0.1).run(bundle, ds)
+    b = LongHorizonConsistencyTask(horizon=3, collapse_threshold=0.9).run(bundle, ds)
+    assert a.metrics["branch_separation_log_error"] == b.metrics["branch_separation_log_error"]

@@ -432,7 +432,7 @@ for label in ("Poincaré ball", "Lorentz hyperboloid", "Euclidean baseline"):
     )
     text(x + w / 2, 1158, label, pill_font, WHITE, anchor="mm")
     x += w + 22
-text(1470, 1232, "493 tests · 4 metrics · 4 tasks · 3 geometries", font(24, mono=True), WHITE)
+text(1470, 1232, "500 tests · 4 metrics · 4 tasks · 3 geometries", font(24, mono=True), WHITE)
 text(
     1470,
     1270,

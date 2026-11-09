@@ -23,10 +23,26 @@ Scalars: the pooled Spearman correlation between latent and encoder divergence o
 ``(pair, h)`` samples, the horizon at which the mean latent divergence first reaches
 ``saturation_fraction`` of its maximum (later is better), and the divergence at the first and
 last horizon.
+
+Branch collapse. A world model can fail by rolling distinct action sequences toward one mean
+trajectory. Both divergences above are geodesic distances in the same manifold, so their ratio is
+unit-free and comparable across geometries and curvatures:
+
+* ``branch_separation_ratio`` (per horizon): mean latent divergence over mean embedded
+  divergence. ``1`` means the rollouts separate exactly as far as the true embedded branches;
+  below ``1`` is collapse, above ``1`` is over-separation. It has no preferred direction, so it
+  is reported but never ranked. ``branch_separation_ratio_median`` is the per-pair median, which
+  a few pairs with nearly identical true frames cannot dominate;
+* ``branch_separation_log_error``: ``|log ratio|`` averaged over horizons, the ranked form
+  (lower is better, ``0`` is perfect, symmetric in collapse and over-separation). A ratio of
+  zero (a static head) is clamped at :data:`RATIO_FLOOR` so it ranks worst instead of infinite;
+* ``branch_collapse_fraction`` (per horizon): fraction of pairs whose latent divergence is below
+  ``collapse_threshold`` times their embedded divergence (lower is better).
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 import pandas as pd
@@ -39,6 +55,41 @@ from hyperbolic_world_model.models.registry import ModelBundle
 from hyperbolic_world_model.tasks.base import Task, TaskResult, spearman
 
 DIVERGENCES = ("latent_divergence", "embedded_divergence", "encoder_divergence", "pixel_divergence")
+
+#: Embedded divergences at or below this are treated as "the true branches did not separate":
+#: the pair has no defined ratio at that horizon. Also the floor of a ratio inside the log error.
+RATIO_FLOOR = 1e-12
+
+
+def branch_separation(
+    latent: Sequence[float] | Tensor, embedded: Sequence[float] | Tensor, collapse_threshold: float
+) -> dict[str, float]:
+    """Separation statistics of one horizon from per-pair latent and embedded divergences.
+
+    Returns ``ratio`` (mean latent over mean embedded), ``median`` (median per-pair ratio over
+    pairs whose embedded divergence exceeds :data:`RATIO_FLOOR`) and ``collapse_fraction``
+    (pairs with ``latent < collapse_threshold * embedded``). ``ratio`` and ``median`` are NaN
+    when the true branches did not separate at all.
+    """
+    lat = torch.as_tensor(latent, dtype=torch.float64)
+    emb = torch.as_tensor(embedded, dtype=torch.float64)
+    if lat.shape != emb.shape or lat.ndim != 1 or lat.numel() == 0:
+        raise ValueError("latent and embedded must be non-empty 1-D sequences of equal length")
+    mean_emb = float(emb.mean())
+    defined = emb > RATIO_FLOOR
+    return {
+        "ratio": float(lat.mean()) / mean_emb if mean_emb > RATIO_FLOOR else math.nan,
+        "median": float((lat[defined] / emb[defined]).median())
+        if bool(defined.any())
+        else math.nan,
+        "collapse_fraction": float((lat < collapse_threshold * emb).to(torch.float64).mean()),
+    }
+
+
+def separation_log_error(ratios: Sequence[float]) -> float:
+    """Mean ``|log ratio|`` over the horizons with a defined ratio (NaN if there are none)."""
+    logs = [abs(math.log(max(r, RATIO_FLOOR))) for r in ratios if not math.isnan(r)]
+    return sum(logs) / len(logs) if logs else math.nan
 
 
 def branch_pairs_of(dataset: Dataset) -> list[tuple[int, int]]:
@@ -74,6 +125,8 @@ class LongHorizonConsistencyTask(Task):
             start frames of a pair. Branches of a real prompt are decoded from separate video
             files and resized, so their start frames agree only to a few uint8 quanta; the
             default allows five (``5 / 255``), far below the difference between distinct frames.
+        collapse_threshold: a pair counts as collapsed at a horizon when its latent divergence
+            is below this fraction of its embedded divergence.
     """
 
     name = "long_horizon_consistency"
@@ -84,6 +137,7 @@ class LongHorizonConsistencyTask(Task):
         batch_size: int = 16,
         saturation_fraction: float = 0.95,
         start_atol: float = 5 / 255,
+        collapse_threshold: float = 0.25,
     ) -> None:
         if int(horizon) < 1:
             raise ValueError("horizon must be >= 1")
@@ -92,7 +146,10 @@ class LongHorizonConsistencyTask(Task):
         self.horizon = int(horizon)
         self.batch_size = int(batch_size)
         self.saturation_fraction = float(saturation_fraction)
+        if not 0 < float(collapse_threshold) <= 1:
+            raise ValueError("collapse_threshold must be in (0, 1]")
         self.start_atol = float(start_atol)
+        self.collapse_threshold = float(collapse_threshold)
 
     def _load_chunk(
         self, dataset: Dataset, pairs: list[tuple[int, int]]
@@ -171,6 +228,16 @@ class LongHorizonConsistencyTask(Task):
         ]
         sat = saturation_horizon(mean["latent_divergence"], self.saturation_fraction)
         lat = mean["latent_divergence"]
+        sep = [
+            branch_separation(
+                per_h["latent_divergence"][t],
+                per_h["embedded_divergence"][t],
+                self.collapse_threshold,
+            )
+            for t in range(h_eff)
+        ]
+        ratios = [s["ratio"] for s in sep]
+        defined = [r for r in ratios if not math.isnan(r)]
         res = self.result(
             bundle,
             divergence_spearman=spearman(pooled["latent_divergence"], pooled["encoder_divergence"]),
@@ -185,6 +252,11 @@ class LongHorizonConsistencyTask(Task):
             latent_divergence_h1=float(lat[0]),
             latent_divergence_hmax=float(lat[-1]),
             latent_divergence_growth=float(lat[-1] / lat[0]) if float(lat[0]) > 0 else float("nan"),
+            branch_separation_ratio_hmax=ratios[-1],
+            branch_separation_ratio_mean=sum(defined) / len(defined) if defined else math.nan,
+            branch_separation_log_error=separation_log_error(ratios),
+            branch_collapse_fraction_hmax=sep[-1]["collapse_fraction"],
+            branch_collapse_fraction_mean=sum(s["collapse_fraction"] for s in sep) / h_eff,
             n_pairs=len(pairs),
             horizon=h_eff,
         )
@@ -193,6 +265,9 @@ class LongHorizonConsistencyTask(Task):
                 "horizon": range(1, h_eff + 1),
                 **{k: mean[k].numpy() for k in DIVERGENCES},
                 "spearman": rho_per_h,
+                "branch_separation_ratio": ratios,
+                "branch_separation_ratio_median": [s["median"] for s in sep],
+                "branch_collapse_fraction": [s["collapse_fraction"] for s in sep],
                 "n_pairs": counts[valid].to(torch.int64).numpy(),
             }
         )
@@ -201,7 +276,10 @@ class LongHorizonConsistencyTask(Task):
 
 __all__ = [
     "DIVERGENCES",
+    "RATIO_FLOOR",
     "LongHorizonConsistencyTask",
     "branch_pairs_of",
+    "branch_separation",
     "saturation_horizon",
+    "separation_log_error",
 ]

@@ -173,7 +173,19 @@ def test_sweep_table_pools_the_spread_across_experiments() -> None:
 def test_unranked_metrics_get_no_best_or_efficiency_row() -> None:
     from hyperbolic_world_model.reporting.tables import UNRANKED_METRICS, is_ranked_metric
 
-    assert UNRANKED_METRICS == {"latent_divergence_h1", "latent_divergence_hmax"}
+    assert UNRANKED_METRICS == {
+        "latent_divergence_h1",
+        "latent_divergence_hmax",
+        "branch_separation_ratio_hmax",
+        "branch_separation_ratio_mean",
+    }
+    # The ranked forms of branch separation are errors: lower is better.
+    for metric in (
+        "branch_separation_log_error",
+        "branch_collapse_fraction_hmax",
+        "branch_collapse_fraction_mean",
+    ):
+        assert is_ranked_metric(metric) and lower_is_better(metric)
     assert all(is_result_metric(m) and not is_ranked_metric(m) for m in UNRANKED_METRICS)
     assert is_ranked_metric("map") and is_ranked_metric("geodesic_error_hmax")
     assert not is_ranked_metric("n_items") and not is_ranked_metric("map_std")
