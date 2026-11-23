@@ -25,7 +25,7 @@ git clone https://github.com/ATaylorAerospace/Hyperbolic-World-Model
 cd Hyperbolic-World-Model
 uv sync                       # creates .venv with the locked dependencies
 cp .env.example .env          # fill in HF_TOKEN only if you need gated weights
-uv run pytest                 # 500 tests, CPU only, about a minute
+uv run pytest                 # 513 tests, CPU only, under a minute
 uv run ruff check . && uv run ruff format --check .
 ```
 

@@ -33,7 +33,7 @@ from hyperbolic_world_model.data.splits import (
     split_by_combination,
 )
 from hyperbolic_world_model.models.registry import ModelBundle
-from hyperbolic_world_model.tasks.base import Task, TaskResult
+from hyperbolic_world_model.tasks.base import Task, TaskResult, check_rollout_horizon
 from hyperbolic_world_model.tasks.latent_rollout import LatentRolloutTask
 
 
@@ -66,6 +66,8 @@ class CompositionalGeneralizationTask(Task):
         batch_size: int = 32,
         holdout: Iterable[Sequence[str]] | None = None,
     ) -> None:
+        if int(horizon) < 1:
+            raise ValueError("horizon must be >= 1")
         self.horizon = int(horizon)
         self.batch_size = int(batch_size)
         self.holdout = normalise_holdout(holdout)
@@ -80,6 +82,11 @@ class CompositionalGeneralizationTask(Task):
         if not seen or not held:
             raise ValueError("both the seen and the held-out subset must be non-empty")
         return seen, held
+
+    def check_dataset(self, dataset: Dataset) -> None:
+        """The horizon fits and the held-out split is valid, checked before any training."""
+        check_rollout_horizon(self.name, self.horizon, dataset)
+        self.split(dataset)
 
     @torch.no_grad()
     def run(self, bundle: ModelBundle, dataset: Dataset, device: str = "cpu") -> TaskResult:

@@ -169,6 +169,7 @@ class LongHorizonConsistencyTask(Task):
         return frames, actions, ia, ib, h
 
     def check_dataset(self, dataset: Dataset) -> None:
+        super().check_dataset(dataset)
         branch_pairs_of(dataset)
 
     @torch.no_grad()

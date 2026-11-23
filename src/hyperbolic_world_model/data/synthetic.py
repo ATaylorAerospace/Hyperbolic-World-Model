@@ -106,7 +106,9 @@ class SyntheticTrajectoryDataset(Dataset):
         return pairs
 
     @classmethod
-    def from_config(cls, cfg: Mapping[str, Any], split: str = "train") -> SyntheticTrajectoryDataset:
+    def from_config(
+        cls, cfg: Mapping[str, Any], split: str = "train"
+    ) -> SyntheticTrajectoryDataset:
         fields = {k: cfg[k] for k in SyntheticSpec.__dataclass_fields__ if k in cfg}
         if "frame_shape" in fields:
             fields["frame_shape"] = tuple(int(x) for x in fields["frame_shape"])

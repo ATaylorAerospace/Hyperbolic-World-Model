@@ -19,6 +19,8 @@ from hyperbolic_world_model.tasks.base import (
     EmbeddedBatch,
     Task,
     TaskResult,
+    check_rollout_horizon,
+    dataset_horizon,
     frechet_mean,
     spearman,
 )
@@ -56,6 +58,8 @@ __all__ = [
     "Task",
     "TaskResult",
     "build_task",
+    "check_rollout_horizon",
+    "dataset_horizon",
     "frechet_mean",
     "spearman",
 ]

@@ -2,11 +2,17 @@
 
 Each item is one window of ``horizon + 1`` frames and ``horizon`` actions from one rollout::
 
-    {"frames": float (T, 3, H, W) in [0, 1], "actions": float (T - 1, a), "meta": {...}}
+    {"frames": float(T, 3, H, W) in [0, 1], "actions": float(T - 1, a), "meta": {...}}
 
 with ``meta`` carrying ``prompt_id``, ``branch_id``, ``embodiment``, ``task``, ``primitive``, the
 window offset and, when extracted, ``latents_path``. Frames are resized to ``image_size`` with
 bilinear interpolation (torch only).
+
+Actions are standardised per dimension, as the shared batch format promises, with statistics
+computed once over the rollouts of the **train** split and applied to every split
+(:attr:`Cosmos3TrajectoryDataset.action_stats`). The stored rows are the raw layout Cosmos was
+conditioned on (``droid_lerobot``: position deltas, 6-D rotation deltas and a gripper value),
+whose dimensions are on different scales. ``normalise_actions=False`` returns the raw rows.
 
 What the two tasks need is exposed directly:
 
@@ -37,6 +43,7 @@ from torch.utils.data import Dataset
 
 from hyperbolic_world_model.data.cosmos3 import default_root
 from hyperbolic_world_model.data.cosmos3.generate import read_manifest
+from hyperbolic_world_model.data.droid import ActionStats, normalise_actions
 from hyperbolic_world_model.data.splits import COMBINATION_KEYS, split_by_combination
 
 log = logging.getLogger(__name__)
@@ -61,6 +68,8 @@ class Cosmos3TrajectoryDataset(Dataset):
             deterministic hash of ``prompt_id`` with ``split_fractions``.
         split_fractions: ``(train, val)`` fractions; the rest is ``test``.
         cache: keep decoded rollouts in memory (fine for a few thousand short rollouts).
+        normalise_actions: standardise actions with the train split's per-dimension mean and
+            std (every rollout's, if the train split is empty); ``False`` returns the raw rows.
     """
 
     def __init__(
@@ -72,6 +81,7 @@ class Cosmos3TrajectoryDataset(Dataset):
         split: str = "all",
         split_fractions: tuple[float, float] = (0.8, 0.1),
         cache: bool = True,
+        normalise_actions: bool = True,
     ) -> None:
         self.root = Path(root) if root is not None else default_root()
         self.records: list[dict[str, Any]] = read_manifest(self.root)
@@ -93,7 +103,9 @@ class Cosmos3TrajectoryDataset(Dataset):
             log.warning(
                 "Cosmos3TrajectoryDataset split=%r is empty under %s (%d rollouts in the manifest; "
                 "the split is a hash of prompt_id, so tiny datasets can lose a split entirely)",
-                split, self.root, len(self.records),
+                split,
+                self.root,
+                len(self.records),
             )
         if horizon is None:
             # Whole rollouts, truncated to the shortest one in the *manifest* (not the split), so
@@ -112,6 +124,10 @@ class Cosmos3TrajectoryDataset(Dataset):
             for start in starts:
                 self.windows.append(Window(i, start))
         self.action_dim = int(self.records[0]["action_dim"])
+        #: Per-dimension mean and std applied to every action, or ``None`` for raw actions.
+        self.action_stats: ActionStats | None = (
+            self._compute_action_stats(split_fractions) if normalise_actions else None
+        )
 
     # ------------------------------------------------------------------ splits and groups
     def _split_indices(self, split: str, fractions: tuple[float, float]) -> list[int]:
@@ -124,10 +140,30 @@ class Cosmos3TrajectoryDataset(Dataset):
         out = []
         for i, r in enumerate(self.records):
             u = (zlib.crc32(str(r["prompt_id"]).encode()) % 10_000) / 10_000
-            name = "train" if u < fractions[0] else "val" if u < fractions[0] + fractions[1] else "test"
+            name = (
+                "train"
+                if u < fractions[0]
+                else "val"
+                if u < fractions[0] + fractions[1]
+                else "test"
+            )
             if name == split:
                 out.append(i)
         return out
+
+    def _compute_action_stats(self, fractions: tuple[float, float]) -> ActionStats:
+        """Mean and std of the train split's actions, whatever split this instance serves.
+
+        Train, val and test must share one normalisation and the statistics must not look at
+        held-out rollouts, so they always come from the train rollouts of the manifest. Only the
+        ``actions`` member of each ``frames.npz`` is read (frames stay compressed on disk).
+        """
+        rollouts = self._split_indices("train", fractions) or list(range(len(self.records)))
+        rows = []
+        for i in rollouts:
+            with np.load(self.root / self.records[i]["frames_path"]) as z:
+                rows.append(torch.from_numpy(z["actions"]).float())
+        return ActionStats.from_actions(torch.cat(rows))
 
     def branches(self, start_only: bool = True) -> dict[str, list[int]]:
         """``prompt_id -> item indices`` of its branches (windows at offset 0 by default)."""
@@ -161,13 +197,16 @@ class Cosmos3TrajectoryDataset(Dataset):
         if a held-out combination never occurs or if holding it out removes an embodiment or a
         primitive entirely.
         """
-        combos = [dict(zip(COMBINATION_KEYS, self.combination(i), strict=True)) for i in range(len(self))]
+        combos = [
+            dict(zip(COMBINATION_KEYS, self.combination(i), strict=True)) for i in range(len(self))
+        ]
         return split_by_combination(combos, holdout)
 
     def metadata(self) -> list[dict[str, str]]:
         """Per-item ``{embodiment, task, primitive}`` for :func:`data.hierarchies.build_hierarchy`."""
         return [
-            {k: str(self.records[w.rollout][k]) for k in ("embodiment", "task", "primitive")} for w in self.windows
+            {k: str(self.records[w.rollout][k]) for k in ("embodiment", "task", "primitive")}
+            for w in self.windows
         ]
 
     # ------------------------------------------------------------------ loading
@@ -176,10 +215,20 @@ class Cosmos3TrajectoryDataset(Dataset):
             return self._cache[rollout]
         rec = self.records[rollout]
         with np.load(self.root / rec["frames_path"]) as z:
-            frames = torch.from_numpy(z["frames"]).permute(0, 3, 1, 2).float() / 255.0  # (T, 3, H, W)
+            frames = (
+                torch.from_numpy(z["frames"]).permute(0, 3, 1, 2).float() / 255.0
+            )  # (T, 3, H, W)
             actions = torch.from_numpy(z["actions"]).float()
+        if self.action_stats is not None:
+            actions = normalise_actions(actions, self.action_stats)
         if self.image_size is not None and tuple(frames.shape[-2:]) != tuple(self.image_size):
-            frames = F.interpolate(frames, size=tuple(self.image_size), mode="bilinear", align_corners=False, antialias=True)
+            frames = F.interpolate(
+                frames,
+                size=tuple(self.image_size),
+                mode="bilinear",
+                align_corners=False,
+                antialias=True,
+            )
         if self.cache:
             self._cache[rollout] = (frames, actions)
         return frames, actions
@@ -190,7 +239,9 @@ class Cosmos3TrajectoryDataset(Dataset):
 
         rec = self.records[self.windows[idx].rollout]
         if not rec.get("latents_path"):
-            raise FileNotFoundError(f"no latents for {rec['prompt_id']}/{rec['branch_id']}; run extract_latents.py")
+            raise FileNotFoundError(
+                f"no latents for {rec['prompt_id']}/{rec['branch_id']}; run extract_latents.py"
+            )
         return load_latents(self.root / rec["latents_path"])
 
     def __len__(self) -> int:
@@ -210,7 +261,11 @@ class Cosmos3TrajectoryDataset(Dataset):
             "start": w.start,
             "latents_path": rec.get("latents_path"),
         }
-        return {"frames": frames[w.start : w.start + h + 1], "actions": actions[w.start : w.start + h], "meta": meta}
+        return {
+            "frames": frames[w.start : w.start + h + 1],
+            "actions": actions[w.start : w.start + h],
+            "meta": meta,
+        }
 
     @classmethod
     def from_config(cls, cfg: Mapping[str, Any], split: str = "train") -> Cosmos3TrajectoryDataset:
@@ -219,10 +274,13 @@ class Cosmos3TrajectoryDataset(Dataset):
             root=cfg.get("root"),
             horizon=None if cfg.get("horizon") in (None, "null") else int(cfg["horizon"]),
             stride=int(cfg.get("stride", 1)),
-            image_size=None if size is None else (int(size) if isinstance(size, int) else tuple(int(s) for s in size)),
+            image_size=None
+            if size is None
+            else (int(size) if isinstance(size, int) else tuple(int(s) for s in size)),
             split=split,
             split_fractions=tuple(cfg.get("split_fractions", (0.8, 0.1))),
             cache=bool(cfg.get("cache", True)),
+            normalise_actions=bool(cfg.get("normalise_actions", True)),
         )
 
     def __repr__(self) -> str:

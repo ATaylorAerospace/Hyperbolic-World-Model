@@ -49,7 +49,9 @@ def normalise_actions(actions: Tensor, stats: ActionStats) -> Tensor:
     return (actions - stats.mean) / stats.std
 
 
-def chunk_episode(frames: Tensor, actions: Tensor, horizon: int, stride: int = 1) -> list[dict[str, Tensor]]:
+def chunk_episode(
+    frames: Tensor, actions: Tensor, horizon: int, stride: int = 1
+) -> list[dict[str, Tensor]]:
     """Cut one episode into overlapping windows of ``horizon + 1`` frames and ``horizon`` actions.
 
     Args:
@@ -64,7 +66,12 @@ def chunk_episode(frames: Tensor, actions: Tensor, horizon: int, stride: int = 1
         raise ValueError("horizon must be >= 1")
     chunks = []
     for start in range(0, frames.shape[0] - horizon, stride):
-        chunks.append({"frames": frames[start : start + horizon + 1], "actions": actions[start : start + horizon]})
+        chunks.append(
+            {
+                "frames": frames[start : start + horizon + 1],
+                "actions": actions[start : start + horizon],
+            }
+        )
     return chunks
 
 

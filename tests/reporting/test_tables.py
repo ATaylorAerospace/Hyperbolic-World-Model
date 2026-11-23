@@ -189,3 +189,44 @@ def test_unranked_metrics_get_no_best_or_efficiency_row() -> None:
     assert all(is_result_metric(m) and not is_ranked_metric(m) for m in UNRANKED_METRICS)
     assert is_ranked_metric("map") and is_ranked_metric("geodesic_error_hmax")
     assert not is_ranked_metric("n_items") and not is_ranked_metric("map_std")
+
+
+def test_dimension_efficiency_threshold_averages_repeated_baselines() -> None:
+    """Two experiments ran the Euclidean baseline: the threshold is their mean at the largest
+    dimension (the value the Euclidean curve itself has there), not whichever sorted last."""
+    row = {"model": "m", "curvature": 0.0, "task": "t", "metric": "err", "std": 0.0, "n_seeds": 1}
+    euc = {**row, "geometry": "euclidean"}
+    hyp = {**row, "geometry": "poincare", "curvature": -1.0, "experiment": "sweep"}
+    s = pd.DataFrame(
+        [
+            {**euc, "experiment": "e1", "latent_dim": 8, "mean": 2.0},
+            {**euc, "experiment": "e1", "latent_dim": 16, "mean": 1.0},
+            {**euc, "experiment": "e2", "latent_dim": 8, "mean": 2.0},
+            {**euc, "experiment": "e2", "latent_dim": 16, "mean": 0.5},
+            {**hyp, "latent_dim": 8, "mean": 0.9},
+            {**hyp, "latent_dim": 16, "mean": 0.6},
+        ]
+    )
+    eff = dimension_efficiency_table(s, "t", "err").set_index("label")
+    # Threshold 0.75: the baseline reaches itself at 16, the ball only at 16 (0.9 > 0.75 at 8).
+    assert eff.loc["euclidean", "dim_to_reach"] == 16
+    assert eff.loc["poincare(K=-1.0)", "dim_to_reach"] == 16
+
+
+def test_sweep_table_marks_a_configuration_that_is_nan_in_every_seed() -> None:
+    """Zero defined seeds used to divide by zero (a NumPy warning and an accidental ``nan``)."""
+    import warnings
+
+    base = {"model": "m", "geometry": "poincare", "curvature": -1.0, "task": "t", "metric": "rho"}
+    table = pd.DataFrame(
+        [{**base, "experiment": "e", "latent_dim": 8, "seed": s, "value": math.nan} for s in (0, 1)]
+        + [
+            {**base, "experiment": "e", "latent_dim": 16, "seed": 0, "value": 0.5},
+            {**base, "experiment": "e", "latent_dim": 16, "seed": 1, "value": math.nan},
+        ]
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        row = sweep_table(summary_table(table), "t", "rho").iloc[0]
+    # Undefined everywhere reads "nan"; one defined seed is reported on its own, without "±".
+    assert row["dim=8"] == "nan" and row["dim=16"] == "0.5000"

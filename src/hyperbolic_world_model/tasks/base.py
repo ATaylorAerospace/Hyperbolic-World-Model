@@ -100,10 +100,11 @@ class Task(ABC):
     def check_dataset(self, dataset: Dataset) -> None:
         """Raise early if ``dataset`` cannot support this task (called before training starts).
 
-        The default accepts anything; tasks with requirements (branch pairs, say) override it so
-        a sweep fails in seconds rather than after every epoch has run.
+        The default only refuses an empty dataset; tasks with further requirements (a rollout
+        horizon, branch pairs, a held-out split) extend it so a sweep fails in seconds rather
+        than after every epoch has run.
         """
-        return None  # deliberately a no-op hook, not an abstract method
+        dataset_horizon(dataset)
 
     def result(self, bundle: ModelBundle, **metrics: float) -> TaskResult:
         """Helper stamping the geometry and curvature onto a result."""
@@ -158,6 +159,27 @@ class Task(ABC):
             offset += n
 
 
+def dataset_horizon(dataset: Dataset) -> int:
+    """Number of actions per item of ``dataset`` (read from its first item).
+
+    Raises:
+        ValueError: if the dataset is empty, which no task can evaluate.
+    """
+    if len(dataset) == 0:  # type: ignore[arg-type]
+        raise ValueError(
+            f"{type(dataset).__name__} is empty; there is nothing to evaluate (for generated "
+            "data, check the split fractions and the horizon against the rollout lengths)"
+        )
+    return int(dataset[0]["actions"].shape[0])
+
+
+def check_rollout_horizon(task: str, horizon: int, dataset: Dataset) -> None:
+    """Raise if ``dataset`` items are shorter than the ``horizon`` a rollout task needs."""
+    available = dataset_horizon(dataset)
+    if horizon > available:
+        raise ValueError(f"{task}: task horizon {horizon} exceeds the dataset horizon {available}")
+
+
 def frechet_mean(
     manifold: Manifold,
     points: Tensor,
@@ -184,6 +206,12 @@ def frechet_mean(
     Tasks use this to pool latents over time and over trajectories: a coordinate average would
     leave the hyperboloid and pull ball points towards the origin.
 
+    The descent runs in float64 whatever the dtype of ``points`` and the result is cast back.
+    In float32 the distance noise of the curved geometries is above ``tol``, so the loop cannot
+    see its own convergence: it runs all ``n_iter`` iterations, warns on nearly every call and
+    returns a mean about ``1e-3`` geodesic units off for points near ``max_radius``. Latents
+    are small, so the promotion costs less than the iterations it saves.
+
     Args:
         manifold: geometry of ``points``.
         points: ``(..., n, d)`` points on ``manifold`` (with ``dim=-2``; any ``dim`` other than
@@ -206,6 +234,10 @@ def frechet_mean(
         raise ValueError("dim must not be the coordinate (last) axis")
     if points.shape[dim] == 0:
         raise ValueError("cannot take the mean of zero points")
+    out_dtype = points.dtype
+    if out_dtype != torch.float64 and points.device.type != "mps":  # MPS has no float64
+        # Re-project after the cast so the constraint holds to float64 accuracy, not float32's.
+        points = manifold.proj(points.to(torch.float64))
     if weights is None:
         w = torch.full(points.shape[:-1], 1.0, dtype=points.dtype, device=points.device)
     else:
@@ -252,7 +284,7 @@ def frechet_mean(
             float(gnorm.max()),
             tol,
         )
-    return x
+    return x if x.dtype == out_dtype else manifold.proj(x.to(out_dtype))
 
 
 def spearman(a: Sequence[float] | Tensor, b: Sequence[float] | Tensor) -> float:
@@ -266,4 +298,12 @@ def spearman(a: Sequence[float] | Tensor, b: Sequence[float] | Tensor) -> float:
     return float(sa.corr(sb, method="spearman"))
 
 
-__all__ = ["EmbeddedBatch", "Task", "TaskResult", "frechet_mean", "spearman"]
+__all__ = [
+    "EmbeddedBatch",
+    "Task",
+    "TaskResult",
+    "check_rollout_horizon",
+    "dataset_horizon",
+    "frechet_mean",
+    "spearman",
+]
