@@ -24,7 +24,7 @@ from torch.utils.data import Dataset
 
 from hyperbolic_world_model.metrics.geodesic_error import geodesic_error, static_baseline_error
 from hyperbolic_world_model.models.registry import ModelBundle
-from hyperbolic_world_model.tasks.base import Task, TaskResult
+from hyperbolic_world_model.tasks.base import Task, TaskResult, check_rollout_horizon
 
 
 @dataclass
@@ -100,6 +100,9 @@ class LatentRolloutTask(Task):
             raise ValueError("horizon must be >= 1")
         self.horizon = int(horizon)
         self.batch_size = int(batch_size)
+
+    def check_dataset(self, dataset: Dataset) -> None:
+        check_rollout_horizon(self.name, self.horizon, dataset)
 
     @torch.no_grad()
     def evaluate(

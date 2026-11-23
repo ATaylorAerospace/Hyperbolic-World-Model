@@ -62,7 +62,7 @@ import logging
 import os
 import platform
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -118,7 +118,7 @@ def load_start_frame(path: Path) -> np.ndarray:
 
 def load_action_spec(actions_json: Path, start_frames_dir: Path) -> list[Prompt]:
     """Parse and validate the action-sequence JSON against the start-frame directory."""
-    spec = json.loads(Path(actions_json).read_text())
+    spec = json.loads(Path(actions_json).read_text(encoding="utf-8"))
     action_dim = int(spec["action_dim"])
     if action_dim < 1:
         raise ValueError("action_dim must be >= 1")
@@ -155,7 +155,14 @@ def load_action_spec(actions_json: Path, start_frames_dir: Path) -> list[Prompt]
         if not branches:
             raise ValueError(f"prompt {pid}: no branches")
         prompts.append(
-            Prompt(pid, frame_path, str(p["embodiment"]), str(p["task"]), tuple(branches), text=str(p.get("prompt", p["task"])))
+            Prompt(
+                pid,
+                frame_path,
+                str(p["embodiment"]),
+                str(p["task"]),
+                tuple(branches),
+                text=str(p.get("prompt", p["task"])),
+            )
         )
     if not prompts:
         raise ValueError("no prompts in action spec")
@@ -198,12 +205,14 @@ def write_video_ffmpeg(path: Path, frames: np.ndarray, fps: int) -> Path | None:
 
     if not ffmpeg_available():
         return None
-    t, h, w, _ = frames.shape
+    _, h, w, _ = frames.shape
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
         "-r", str(fps), "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", str(path),
     ]  # fmt: skip
-    proc = subprocess.run(cmd, input=np.ascontiguousarray(frames).tobytes(), capture_output=True, check=False)
+    proc = subprocess.run(
+        cmd, input=np.ascontiguousarray(frames).tobytes(), capture_output=True, check=False
+    )
     if proc.returncode != 0:
         return None
     return path
@@ -215,7 +224,9 @@ def read_video_ffmpeg(path: Path) -> np.ndarray:
     import subprocess
 
     if shutil.which("ffprobe") is None or not ffmpeg_available():
-        raise RuntimeError("ffmpeg/ffprobe are required to read generated videos (a cosmos-framework prerequisite)")
+        raise RuntimeError(
+            "ffmpeg/ffprobe are required to read generated videos (a cosmos-framework prerequisite)"
+        )
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
         capture_output=True, text=True, check=True,
@@ -264,7 +275,9 @@ class Cosmos3Generator:
         runner: Callable[[list[dict[str, Any]], Path], dict[str, np.ndarray]] | None = None,
     ) -> None:
         if chunk_size < 4 or chunk_size % 4:
-            raise ValueError("chunk_size must be a positive multiple of 4 (output frames = chunk_size + 1 = 4n + 1)")
+            raise ValueError(
+                "chunk_size must be a positive multiple of 4 (output frames = chunk_size + 1 = 4n + 1)"
+            )
         self.checkpoint = checkpoint
         self.domain_name = domain_name
         self.chunk_size = int(chunk_size)
@@ -299,7 +312,9 @@ class Cosmos3Generator:
         self._work_dir.mkdir(parents=True, exist_ok=True)
         return self._work_dir
 
-    def make_sample(self, name: str, image_path: Path, action_path: Path, seed: int, text: str) -> dict[str, Any]:
+    def make_sample(
+        self, name: str, image_path: Path, action_path: Path, seed: int, text: str
+    ) -> dict[str, Any]:
         """One ``forward_dynamics`` sample as the framework's input schema expects it."""
         sample: dict[str, Any] = {
             "name": name,
@@ -323,7 +338,17 @@ class Cosmos3Generator:
     def framework_command(self, samples_file: Path, out_dir: Path) -> list[str]:
         import sys
 
-        cmd = [self.python or sys.executable, "-m", "cosmos_framework.scripts.inference", "-i", str(samples_file), "-o", str(out_dir), "--checkpoint-path", self.checkpoint]
+        cmd = [
+            self.python or sys.executable,
+            "-m",
+            "cosmos_framework.scripts.inference",
+            "-i",
+            str(samples_file),
+            "-o",
+            str(out_dir),
+            "--checkpoint-path",
+            self.checkpoint,
+        ]
         if not self.guardrails:
             cmd.append("--no-guardrails")
         return cmd
@@ -354,7 +379,11 @@ class Cosmos3Generator:
         results = {}
         for s in samples:
             d = out_dir / s["name"]
-            status = json.loads((d / "sample_outputs.json").read_text()) if (d / "sample_outputs.json").exists() else {}
+            status = (
+                json.loads((d / "sample_outputs.json").read_text())
+                if (d / "sample_outputs.json").exists()
+                else {}
+            )
             video = d / "vision.mp4"
             if not video.exists():
                 raise RuntimeError(f"no vision.mp4 for sample {s['name']}: {status}")
@@ -379,7 +408,9 @@ class Cosmos3Generator:
         keys = {j.key for j in jobs}
         if len(keys) != len(jobs):
             raise ValueError("job keys must be unique")
-        n_levels = max(int(np.ceil(j.actions.shape[0] / self.chunk_size)) for j in jobs) if jobs else 0
+        n_levels = (
+            max(int(np.ceil(j.actions.shape[0] / self.chunk_size)) for j in jobs) if jobs else 0
+        )
         current: dict[str, np.ndarray] = {j.key: j.start_frame for j in jobs}
         chunks: dict[str, list[np.ndarray]] = {j.key: [] for j in jobs}
         for level in range(n_levels):
@@ -393,13 +424,17 @@ class Cosmos3Generator:
                 chunk = j.actions[start : start + self.chunk_size].astype(np.float32)
                 pad = self.chunk_size - chunk.shape[0]
                 if pad > 0:  # last chunk: zero actions, frames dropped after stitching
-                    chunk = np.concatenate([chunk, np.zeros((pad, chunk.shape[1]), dtype=chunk.dtype)], axis=0)
+                    chunk = np.concatenate(
+                        [chunk, np.zeros((pad, chunk.shape[1]), dtype=chunk.dtype)], axis=0
+                    )
                 name = f"{_safe(j.key)}_c{level:03d}"
                 image_path = level_dir / "inputs" / f"{name}.png"
                 Image.fromarray(current[j.key]).save(image_path)
                 action_path = level_dir / "inputs" / f"{name}.json"
                 action_path.write_text(json.dumps(chunk.tolist()))
-                samples.append(self.make_sample(name, image_path, action_path, j.seed + level, j.text))
+                samples.append(
+                    self.make_sample(name, image_path, action_path, j.seed + level, j.text)
+                )
                 active.append((j.key, name))
             names = [name for _, name in active]
             if len(set(names)) != len(names):
@@ -411,8 +446,14 @@ class Cosmos3Generator:
             outputs = self._runner(samples, level_dir)
             for key, name in active:
                 frames = outputs[name]
-                if frames.ndim != 4 or frames.shape[0] < self.chunk_size + 1 or frames.dtype != np.uint8:
-                    raise RuntimeError(f"{name}: expected >= {self.chunk_size + 1} uint8 frames, got {frames.shape} {frames.dtype}")
+                if (
+                    frames.ndim != 4
+                    or frames.shape[0] < self.chunk_size + 1
+                    or frames.dtype != np.uint8
+                ):
+                    raise RuntimeError(
+                        f"{name}: expected >= {self.chunk_size + 1} uint8 frames, got {frames.shape} {frames.dtype}"
+                    )
                 frames = frames[: self.chunk_size + 1]
                 chunks[key].append(frames)
                 current[key] = frames[-1]
@@ -426,7 +467,8 @@ class Cosmos3Generator:
         return self.generate_batch([RolloutJob("single", start_frame, actions, seed)])["single"]
 
 
-#: Record fields written by :func:`write_rollout`; an action spec may not set them.
+#: Record fields written by :func:`write_rollout` or by ``extract_latents``; an action spec may
+#: not set them.
 MANIFEST_FIELDS: frozenset[str] = frozenset(
     {
         "prompt_id",
@@ -437,6 +479,8 @@ MANIFEST_FIELDS: frozenset[str] = frozenset(
         "frames_path",
         "mp4_path",
         "latents_path",
+        "latents_pooling",
+        "latent_shape",
         "num_frames",
         "height",
         "width",
@@ -466,8 +510,14 @@ def write_rollout(
     fps: int = 10,
 ) -> dict[str, Any]:
     """Save ``frames.npz`` + ``meta.json`` (+ optional mp4) and return the manifest record."""
-    if frames.ndim != 4 or frames.shape[0] != branch.actions.shape[0] + 1 or frames.dtype != np.uint8:
-        raise ValueError(f"frames must be (T = len(actions) + 1, H, W, 3) uint8, got {frames.shape} {frames.dtype}")
+    if (
+        frames.ndim != 4
+        or frames.shape[0] != branch.actions.shape[0] + 1
+        or frames.dtype != np.uint8
+    ):
+        raise ValueError(
+            f"frames must be (T = len(actions) + 1, H, W, 3) uint8, got {frames.shape} {frames.dtype}"
+        )
     d = Path(out_root) / "rollouts" / prompt.prompt_id / branch.branch_id
     d.mkdir(parents=True, exist_ok=True)
     frames_path = d / "frames.npz"
@@ -484,6 +534,8 @@ def write_rollout(
         "frames_path": frames_path.relative_to(out_root).as_posix(),
         "mp4_path": Path(mp4_path).relative_to(out_root).as_posix() if mp4_path else None,
         "latents_path": None,
+        "latents_pooling": None,
+        "latent_shape": None,
         "num_frames": int(frames.shape[0]),
         "height": int(frames.shape[1]),
         "width": int(frames.shape[2]),
@@ -504,7 +556,7 @@ def _maybe_write_mp4(path: Path, frames: np.ndarray, fps: int) -> str | None:
     """Preview mp4 via ffmpeg; ``None`` (never an error) when ffmpeg is unavailable. npz is canonical."""
     try:
         written = write_video_ffmpeg(path, frames, fps)
-    except Exception:  # noqa: BLE001 - a broken encoder must not fail generation
+    except Exception:
         written = None
     if written is None and ffmpeg_available():
         # yuv420p needs even dimensions; a failed encode is otherwise invisible in the manifest.
@@ -514,33 +566,48 @@ def _maybe_write_mp4(path: Path, frames: np.ndarray, fps: int) -> str | None:
 
 def append_manifest(out_root: Path, records: Iterable[dict[str, Any]]) -> Path:
     path = Path(out_root) / "manifest.jsonl"
-    with path.open("a") as f:
+    with path.open("a", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r) + "\n")
     return path
 
 
+def write_manifest(out_root: Path, records: Iterable[dict[str, Any]]) -> Path:
+    """Replace ``manifest.jsonl`` with ``records`` atomically (temporary file, then rename).
+
+    The manifest is the source of truth for the dataset, so a rewrite interrupted half-way must
+    leave the previous file intact rather than a truncated one.
+    """
+    path = Path(out_root) / "manifest.jsonl"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
 def _drop_from_manifest(out_root: Path, keys: set[tuple[str, str]]) -> None:
     """Rewrite ``manifest.jsonl`` without the records whose ``(prompt_id, branch_id)`` is in ``keys``."""
-    path = Path(out_root) / "manifest.jsonl"
-    if not path.exists():
+    if not (Path(out_root) / "manifest.jsonl").exists():
         return
     kept = [r for r in read_manifest(out_root) if (r["prompt_id"], r["branch_id"]) not in keys]
-    path.write_text("".join(json.dumps(r) + "\n" for r in kept))
+    write_manifest(out_root, kept)
 
 
 def read_manifest(out_root: Path) -> list[dict[str, Any]]:
     path = Path(out_root) / "manifest.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
 
 
 def branch_seed(base_seed: int, prompt_id: str, branch_id: str) -> int:
     """Deterministic per-branch seed: same inputs -> same seed, different branches -> different seeds."""
     import zlib
 
-    return (int(base_seed) * 1_000_003 + zlib.crc32(f"{prompt_id}/{branch_id}".encode())) % (2**31 - 1)
+    return (int(base_seed) * 1_000_003 + zlib.crc32(f"{prompt_id}/{branch_id}".encode())) % (
+        2**31 - 1
+    )
 
 
 # ---------------------------------------------------------------------------- driver
@@ -557,7 +624,11 @@ def generate_rollouts(
     """Generate every branch of every prompt and append the manifest. Idempotent with ``skip_existing``."""
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
-    done = {(r["prompt_id"], r["branch_id"]) for r in read_manifest(out_root)} if skip_existing else set()
+    done = (
+        {(r["prompt_id"], r["branch_id"]) for r in read_manifest(out_root)}
+        if skip_existing
+        else set()
+    )
     todo: list[tuple[Prompt, Branch, RolloutJob]] = []
     for prompt in prompts:
         start = load_start_frame(prompt.start_frame_path)
@@ -565,20 +636,40 @@ def generate_rollouts(
             if (prompt.prompt_id, branch.branch_id) in done:
                 continue
             s = branch_seed(seed, prompt.prompt_id, branch.branch_id)
-            todo.append((prompt, branch, RolloutJob(f"{prompt.prompt_id}/{branch.branch_id}", start, branch.actions, s, prompt.text)))
+            todo.append(
+                (
+                    prompt,
+                    branch,
+                    RolloutJob(
+                        f"{prompt.prompt_id}/{branch.branch_id}",
+                        start,
+                        branch.actions,
+                        s,
+                        prompt.text,
+                    ),
+                )
+            )
     if not todo:
         return []
-    if not skip_existing:  # regenerated rollouts replace their manifest records, never duplicate
-        _drop_from_manifest(out_root, {(p.prompt_id, b.branch_id) for p, b, _ in todo})
     batch = getattr(generator, "generate_batch", None)
     if callable(batch):  # Cosmos 3: every rollout's chunk level shares one model invocation
         videos = batch([job for _, _, job in todo])
     else:
-        videos = {job.key: generator.generate(job.start_frame, job.actions, job.seed) for _, _, job in todo}
+        videos = {
+            job.key: generator.generate(job.start_frame, job.actions, job.seed)
+            for _, _, job in todo
+        }
+    if not skip_existing:
+        # Regenerated rollouts replace their manifest records, never duplicate them. The old
+        # records go only now, once the model has produced every replacement: a generation that
+        # fails (no GPU, a framework error) leaves the manifest and its rollouts as they were.
+        _drop_from_manifest(out_root, {(p.prompt_id, b.branch_id) for p, b, _ in todo})
     records = []
     for prompt, branch, job in todo:
         frames = videos[job.key]
-        rec = write_rollout(out_root, prompt, branch, frames, job.seed, generator.model_info, write_mp4, fps)
+        rec = write_rollout(
+            out_root, prompt, branch, frames, job.seed, generator.model_info, write_mp4, fps
+        )
         append_manifest(out_root, [rec])
         records.append(rec)
         if progress:
@@ -614,29 +705,74 @@ def write_plan(prompts: list[Prompt], out_root: Path, seed: int, model: str) -> 
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--start-frames", type=Path, required=True, help="directory of start frames (.png/.jpg/.npy)")
-    p.add_argument("--actions", type=Path, required=True, help="JSON file of action sequences (see module doc)")
-    p.add_argument("--out", type=Path, default=None, help="output root; default $DATA_ROOT/cosmos3_generated")
-    p.add_argument("--checkpoint", default=DEFAULT_MODEL, help="cosmos-framework --checkpoint-path (Cosmos3-Nano)")
-    p.add_argument("--domain-name", default=DEFAULT_DOMAIN, help="action domain (droid_lerobot: 10-D rows)")
-    p.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE, help="actions per model call (multiple of 4)")
-    p.add_argument("--image-size", type=int, default=256, help="action media resize bucket (256 or 480)")
-    p.add_argument("--fps", type=int, default=10, help="conditioning/output fps (also used for the mp4 preview)")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--start-frames",
+        type=Path,
+        required=True,
+        help="directory of start frames (.png/.jpg/.npy)",
+    )
+    p.add_argument(
+        "--actions", type=Path, required=True, help="JSON file of action sequences (see module doc)"
+    )
+    p.add_argument(
+        "--out", type=Path, default=None, help="output root; default $DATA_ROOT/cosmos3_generated"
+    )
+    p.add_argument(
+        "--checkpoint",
+        default=DEFAULT_MODEL,
+        help="cosmos-framework --checkpoint-path (Cosmos3-Nano)",
+    )
+    p.add_argument(
+        "--domain-name", default=DEFAULT_DOMAIN, help="action domain (droid_lerobot: 10-D rows)"
+    )
+    p.add_argument(
+        "--chunk-size",
+        type=int,
+        default=DEFAULT_CHUNK_SIZE,
+        help="actions per model call (multiple of 4)",
+    )
+    p.add_argument(
+        "--image-size", type=int, default=256, help="action media resize bucket (256 or 480)"
+    )
+    p.add_argument(
+        "--fps",
+        type=int,
+        default=10,
+        help="conditioning/output fps (also used for the mp4 preview)",
+    )
     p.add_argument("--view-point", default="ego_view")
-    p.add_argument("--num-steps", type=int, default=None, help="denoising steps; default: framework preset")
-    p.add_argument("--guidance", type=float, default=None, help="guidance; default: framework preset")
-    p.add_argument("--guardrails", action="store_true", help="keep NVIDIA's guardrails on (default: --no-guardrails)")
-    p.add_argument("--work-dir", type=Path, default=None, help="scratch dir for framework inputs/outputs")
+    p.add_argument(
+        "--num-steps", type=int, default=None, help="denoising steps; default: framework preset"
+    )
+    p.add_argument(
+        "--guidance", type=float, default=None, help="guidance; default: framework preset"
+    )
+    p.add_argument(
+        "--guardrails",
+        action="store_true",
+        help="keep NVIDIA's guardrails on (default: --no-guardrails)",
+    )
+    p.add_argument(
+        "--work-dir", type=Path, default=None, help="scratch dir for framework inputs/outputs"
+    )
     p.add_argument("--python", default=None, help="interpreter with cosmos_framework installed")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--no-mp4", action="store_true")
-    p.add_argument("--overwrite", action="store_true", help="regenerate rollouts already in the manifest")
-    p.add_argument("--dry-run", action="store_true", help="validate inputs and write generation_plan.json only")
+    p.add_argument(
+        "--overwrite", action="store_true", help="regenerate rollouts already in the manifest"
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="validate inputs and write generation_plan.json only"
+    )
     return p.parse_args(argv)
 
 
-def main(argv: list[str] | None = None, generator: ActionConditionedGenerator | None = None) -> list[dict[str, Any]]:
+def main(
+    argv: list[str] | None = None, generator: ActionConditionedGenerator | None = None
+) -> list[dict[str, Any]]:
     args = parse_args(argv)
     out_root = args.out or default_root()
     prompts = load_action_spec(args.actions, args.start_frames)
@@ -658,9 +794,18 @@ def main(argv: list[str] | None = None, generator: ActionConditionedGenerator | 
         python=args.python,
     )
     records = generate_rollouts(
-        prompts, gen, out_root, seed=args.seed, write_mp4=not args.no_mp4, fps=args.fps, skip_existing=not args.overwrite, progress=print
+        prompts,
+        gen,
+        out_root,
+        seed=args.seed,
+        write_mp4=not args.no_mp4,
+        fps=args.fps,
+        skip_existing=not args.overwrite,
+        progress=print,
     )
-    print(f"generated {len(records)} rollouts under {out_root} (manifest: {Path(out_root) / 'manifest.jsonl'})")
+    print(
+        f"generated {len(records)} rollouts under {out_root} (manifest: {Path(out_root) / 'manifest.jsonl'})"
+    )
     return records
 
 
@@ -671,21 +816,22 @@ __all__ = [
     "DEFAULT_CHUNK_SIZE",
     "DEFAULT_DOMAIN",
     "DEFAULT_MODEL",
+    "MANIFEST_FIELDS",
     "ActionConditionedGenerator",
     "Branch",
     "Cosmos3Generator",
     "Prompt",
     "RolloutJob",
-    "MANIFEST_FIELDS",
     "append_manifest",
     "branch_seed",
+    "ffmpeg_available",
     "generate_rollouts",
     "load_action_spec",
     "load_start_frame",
     "main",
     "read_manifest",
-    "ffmpeg_available",
     "read_video_ffmpeg",
+    "write_manifest",
     "write_plan",
     "write_rollout",
     "write_video_ffmpeg",

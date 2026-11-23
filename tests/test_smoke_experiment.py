@@ -191,3 +191,38 @@ def test_tasks_are_checked_against_the_data_before_training(tmp_path: Path) -> N
     with pytest.raises(ValueError, match="no branch pairs"):
         run(cfg)
     assert not (tmp_path / "metrics.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        (["tasks.0.horizon=9"], "latent_rollout: task horizon 9 exceeds the dataset horizon 8"),
+        (
+            ["tasks=compositional_generalization", "data.holdout_combinations=[[arm_a,fly]]"],
+            "not present in the data",
+        ),
+        (
+            [
+                "tasks=compositional_generalization",
+                "data.holdout_combinations=[[arm_a,reach]]",
+                "tasks.0.horizon=9",
+            ],
+            "compositional_generalization: task horizon 9 exceeds",
+        ),
+    ],
+)
+def test_rollout_tasks_fail_before_the_model_is_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: list[str], match: str
+) -> None:
+    """A horizon longer than the data, or an invalid hold-out, used to surface only when the
+    task ran, after every epoch had been trained."""
+    from hyperbolic_world_model.training import train_predictor
+
+    def no_model(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the model must not be built for a run that cannot be evaluated")
+
+    monkeypatch.setattr(train_predictor, "build_model", no_model)
+    cfg = _compose(tmp_path, "training.epochs=50", *overrides)
+    with pytest.raises(ValueError, match=match):
+        run(cfg)
+    assert not (tmp_path / "metrics.json").exists()

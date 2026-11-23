@@ -13,7 +13,8 @@ uv run ruff check . && uv run ruff format --check .
 
 Both must pass. CI runs the same on CPU (ruff, the unit tests under `tests/geometry`,
 `tests/metrics`, `tests/data`, `tests/models`, `tests/tasks` and `tests/reporting`, then
-`scripts/run_smoke.sh`). Never skip or disable a test to get green.
+`scripts/run_smoke.sh` and `tests/test_smoke_experiment.py`). Never skip or disable a test to get
+green.
 
 ## Attribution and commit rules
 

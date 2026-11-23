@@ -216,3 +216,48 @@ def test_frechet_mean_converges_where_the_unit_step_bounces(
     with caplog.at_level("WARNING"):
         frechet_mean(m, pts, dim=1, n_iter=1)
     assert "did not converge" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "m", [PoincareBall(c=-1.0), PoincareBall(c=-4.0), Lorentz(c=-1.0), Lorentz(c=-0.1)]
+)
+def test_frechet_mean_of_float32_points_converges_in_float64(
+    m: Manifold, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Float32 distance noise is above the tolerance, so a float32 descent ran out of iterations
+    and warned on nearly every call; the mean is computed in float64 and cast back."""
+    torch.manual_seed(0)
+    v = torch.randn(16, 9, 6)
+    v = v / v.norm(dim=-1, keepdim=True) * (0.5 + 2.5 * torch.rand(16, 9, 1))
+    pts = m.expmap0(m.tangent0_from_euclidean(v / m.lambda0))
+    assert pts.dtype == torch.float32
+    with caplog.at_level("WARNING"):
+        mu = frechet_mean(m, pts, dim=1)
+    assert "did not converge" not in caplog.text
+    assert mu.dtype == torch.float32 and mu.shape == (16, pts.shape[-1])
+    assert bool(m.check_point(mu).all())
+    ref = frechet_mean(m, m.proj(pts.double()), dim=1)
+    assert ref.dtype == torch.float64
+    assert float(m.dist(m.proj(mu.double()), ref).max()) < 1e-5
+
+
+def test_check_dataset_refuses_empty_data_and_short_horizons() -> None:
+    from torch.utils.data import Subset
+
+    from hyperbolic_world_model.tasks import check_rollout_horizon, dataset_horizon
+
+    ds = synthetic_dataset()
+    horizon = dataset_horizon(ds)
+    assert horizon == ds.spec.horizon
+    LatentRolloutTask(horizon=horizon).check_dataset(ds)
+    HierarchyReconstructionTask().check_dataset(ds)
+    with pytest.raises(ValueError, match=f"horizon {horizon + 1} exceeds the dataset horizon"):
+        LatentRolloutTask(horizon=horizon + 1).check_dataset(ds)
+    with pytest.raises(ValueError, match="my_task: task horizon"):
+        check_rollout_horizon("my_task", horizon + 1, ds)
+    empty = Subset(ds, [])
+    for task in (LatentRolloutTask(horizon=1), HierarchyReconstructionTask()):
+        with pytest.raises(ValueError, match="is empty"):
+            task.check_dataset(empty)
+    with pytest.raises(ValueError, match="horizon must be >= 1"):
+        CompositionalGeneralizationTask(horizon=0, holdout=[["arm_a", "grasp"]])

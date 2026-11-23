@@ -69,6 +69,10 @@ jobs:
           uv pip install -e ".[dev]"
       - name: Run the smoke experiment end to end
         run: uv run --no-sync bash scripts/run_smoke.sh
+      # The unit-test job runs the per-package suites only; the end-to-end tests (all three
+      # geometries, all four tasks, the pre-training checks) run here, once.
+      - name: End-to-end smoke tests
+        run: uv run --no-sync pytest tests/test_smoke_experiment.py -v
       - name: Upload smoke outputs
         if: always()
         uses: actions/upload-artifact@v4

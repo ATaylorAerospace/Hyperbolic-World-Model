@@ -89,7 +89,18 @@ tested without them.
 Every rollout's `meta.json` and manifest line record the prompt id, branch id, per-branch seed
 (derived deterministically from `--seed`, the prompt id and the branch id; each chunk adds its
 level), the checkpoint, domain, chunk size, image size, sampler settings and timestamp. Re-running with the same inputs regenerates identical
-rollouts; `--overwrite` forces it, otherwise already-generated rollouts are skipped.
+rollouts; `--overwrite` forces it, otherwise already-generated rollouts are skipped. The old
+manifest records are dropped only once the model has produced every replacement, and the manifest
+is only ever replaced through a temporary file, so a failed or interrupted run leaves it usable.
+
+Latent extraction writes the manifest after every rollout (`latents_path`, `latents_pooling`,
+`latent_shape`), so an interrupted run resumes where it stopped. A rollout is skipped only when
+its stored latents use the requested `--pooling`; asking for the other pooling re-encodes it.
+
+The loader (`data/cosmos3/dataset.py`) standardises actions per dimension with the mean and std
+of the train split's rollouts and applies the same statistics to every split, because the raw
+`droid_lerobot` rows mix position deltas, rotation deltas and a gripper value on different
+scales. `data.normalise_actions=false` returns the raw rows.
 
 ## Status
 

@@ -169,7 +169,9 @@ def sweep_table(summary: pd.DataFrame, task: str, metric: str) -> pd.DataFrame:
     """``(model, geometry, curvature)`` rows x ``latent_dim`` columns of ``mean ± std`` for one metric.
 
     Repeated runs of the same configuration under different experiment names are averaged (with
-    the seed-count-weighted mean of their means); models are kept apart.
+    the seed-count-weighted mean of their means); models are kept apart. A cell is empty when
+    the configuration was never run and ``nan`` when it ran but the metric is undefined in every
+    seed; seeds with an undefined value are left out of the mean, the spread and the count.
     """
     df = summary[(summary["task"] == task) & (summary["metric"] == metric)]
     dims = sorted(int(d) for d in df["latent_dim"].dropna().unique())
@@ -180,10 +182,14 @@ def sweep_table(summary: pd.DataFrame, task: str, metric: str) -> pd.DataFrame:
         row = {"model": model, "geometry": geometry, "curvature": curvature}
         for d in dims:
             cell = grp[grp["latent_dim"] == d]
+            n = int(cell["n_seeds"].sum())
             if cell.empty:
                 row[f"dim={d}"] = ""
+            elif n == 0:
+                # The configuration ran but the metric is NaN in every seed (an undefined
+                # correlation, say): say so rather than divide by zero or look like "no run".
+                row[f"dim={d}"] = "nan"
             else:
-                n = int(cell["n_seeds"].sum())
                 mean = float((cell["mean"] * cell["n_seeds"]).sum() / n)
                 # Pooled std over every run behind the cell (within + between experiments), so
                 # two single-seed experiments with different values do not render as "± 0".
@@ -272,7 +278,9 @@ def dimension_efficiency_table(summary: pd.DataFrame, task: str, metric: str) ->
 
     The threshold for ``dim_to_reach`` is the Euclidean baseline's value at its largest
     dimension, so the column reads "the dimension at which this geometry matches the flat
-    baseline at full width"; it is ``NaN`` when there is no Euclidean run.
+    baseline at full width"; it is ``NaN`` when there is no Euclidean run. When several
+    experiments ran the baseline, the threshold is the mean over them, the same value the
+    Euclidean curve itself carries at that dimension.
     """
     lower = lower_is_better(metric)
     df = summary[(summary["task"] == task) & (summary["metric"] == metric)].copy()
@@ -299,8 +307,10 @@ def dimension_efficiency_table(summary: pd.DataFrame, task: str, metric: str) ->
             per_model, label_col="label", dim_col="latent_dim", value_col="mean"
         )
         euc = per_model[(per_model["geometry"] == "euclidean") & per_model["mean"].notna()]
-        euc = euc.sort_values("latent_dim", kind="stable")
-        threshold = float(euc["mean"].iloc[-1]) if not euc.empty else None
+        # Averaged per dimension exactly as curves_from_table averages the curve, so the
+        # Euclidean row always reaches its own threshold at its largest dimension.
+        euc_curve = euc.groupby("latent_dim", sort=True)["mean"].mean()
+        threshold = float(euc_curve.iloc[-1]) if not euc_curve.empty else None
         out = efficiency_table(curves, threshold=threshold, lower_is_better=lower)
         out.insert(0, "metric", metric)
         out.insert(0, "task", task)

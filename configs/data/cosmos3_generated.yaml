@@ -8,4 +8,5 @@ image_size: 256                      # frames are resized (bilinear) to this on 
 split_fractions: [0.8, 0.1]          # train / val by prompt_id hash; the rest is test
 cache: true                          # keep decoded rollouts in memory
 action_dim: 10                       # droid_lerobot raw layout: [pos_delta (3), rot6d_delta (6), gripper (1)]
+normalise_actions: true              # standardise per dimension with the train split's mean and std
 holdout_combinations: []             # [[embodiment, primitive], ...] held out for compositional generalisation

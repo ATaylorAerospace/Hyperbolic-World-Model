@@ -10,7 +10,9 @@ Invariants enforced here (see docs/methodology.md):
       any checkpoint; only ``predictor.state_dict()`` is ever saved.
     * the loss is ``predictor.loss`` = squared geodesic distance in the head's geometry.
     * the geometry, curvature, latent dimension and seed are written next to every metric.
-    * every configured task is built *before* training so a misconfigured task fails fast.
+    * every configured task is built, and checked against the evaluation data, *before* the
+      encoder is loaded or anything is trained, so a misconfigured task, an empty split or an
+      invalid held-out combination fails in seconds.
     * when ``data.holdout_combinations`` is set, the head is trained on the seen
       (embodiment, primitive) combinations only, so the compositional-generalisation task
       evaluates combinations the head never saw.
@@ -228,8 +230,13 @@ def run(cfg: DictConfig) -> dict[str, Any]:
     eval_ds = build_dataset(cfg.data, split="val")
     for task in tasks:  # fail before training if the evaluation data cannot support a task
         task.check_dataset(eval_ds)
-    bundle = build_model(cfg, action_dim=int(train_ds.action_dim), device=device)
+    # Also before the encoder is loaded: an invalid hold-out or an empty split needs no model.
     train_subset = training_subset(train_ds, cfg.data.get("holdout_combinations"))
+    if len(train_subset) == 0:
+        raise ValueError(
+            f"the training split of data={cfg.data.name} is empty; there is nothing to train on"
+        )
+    bundle = build_model(cfg, action_dim=int(train_ds.action_dim), device=device)
     history = train(bundle, train_subset, cfg, device)
     results = evaluate(bundle, eval_ds, cfg, device, tasks=tasks)
     out_dir = Path(cfg.output_dir)

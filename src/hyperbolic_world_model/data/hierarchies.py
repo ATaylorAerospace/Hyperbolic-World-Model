@@ -103,7 +103,9 @@ class Hierarchy:
         """
         paths = self.ancestor_matrix()  # (n, w)
         same = (paths.unsqueeze(1) == paths.unsqueeze(0)) & (paths.unsqueeze(1) >= 0)  # (n, n, w)
-        common = torch.cumprod(same.to(torch.int64), dim=-1).sum(-1)  # common prefix length (>= 1: the root)
+        common = torch.cumprod(same.to(torch.int64), dim=-1).sum(
+            -1
+        )  # common prefix length (>= 1: the root)
         depth = torch.tensor(self.depth, dtype=torch.int64)
         d = depth.unsqueeze(1) + depth.unsqueeze(0) - 2 * (common - 1)
         return d.to(torch.float64)
@@ -113,7 +115,9 @@ class Hierarchy:
         return [i for i in range(self.n_nodes) if i not in children]
 
 
-def build_hierarchy(metadata: Iterable[Mapping[str, str]], levels: Sequence[str] = LEVELS) -> Hierarchy:
+def build_hierarchy(
+    metadata: Iterable[Mapping[str, str]], levels: Sequence[str] = LEVELS
+) -> Hierarchy:
     """Build the tree from per-trajectory metadata dicts.
 
     Args:
@@ -129,9 +133,13 @@ def build_hierarchy(metadata: Iterable[Mapping[str, str]], levels: Sequence[str]
     return tree
 
 
-def leaf_index_for_metadata(tree: Hierarchy, metadata: Iterable[Mapping[str, str]], levels: Sequence[str] = LEVELS) -> Tensor:
+def leaf_index_for_metadata(
+    tree: Hierarchy, metadata: Iterable[Mapping[str, str]], levels: Sequence[str] = LEVELS
+) -> Tensor:
     """Map each metadata record to its leaf node index (for aligning latents with tree nodes)."""
-    return torch.tensor([tree.index_of([str(rec[k]) for k in levels]) for rec in metadata], dtype=torch.long)
+    return torch.tensor(
+        [tree.index_of([str(rec[k]) for k in levels]) for rec in metadata], dtype=torch.long
+    )
 
 
 __all__ = ["LEVELS", "Hierarchy", "build_hierarchy", "leaf_index_for_metadata"]

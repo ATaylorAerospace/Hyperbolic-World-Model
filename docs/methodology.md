@@ -82,7 +82,8 @@ either outcome is visible.
   bootstrap resamples of the trajectories within every leaf (`n_seeds`). Trajectories are pooled
   over time, and tree nodes over the trajectories in their subtree, with a Fréchet mean on the
   head's manifold (`tasks/base.py::frechet_mean`, Riemannian descent with a backtracking line
-  search), never with a coordinate average.
+  search, iterated in float64 because float32 distance noise is above its convergence
+  tolerance), never with a coordinate average.
 - **Falsified if** the best curvature does not improve both distortion and mAP over Euclidean by
   more than the seed standard deviation, or if the depth correlation is not positive.
 - **Data.** DROID metadata; synthetic hierarchy for CI.
